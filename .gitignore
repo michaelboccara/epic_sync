@@ -1,7 +1,7 @@
 venv/
 .idea/
-*.json
-convert.exe
+.vscode/
 cache/
 epic_cache/
+__pycache__/
 *.ply

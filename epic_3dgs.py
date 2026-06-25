@@ -161,6 +161,46 @@ def load_offline(meta_path: str, image_paths: list[str]) -> tuple[list, dict]:
     return meta_list, image_dict
 
 
+def detect_earth_disk(img: np.ndarray, brightness_threshold: float = 0.04) -> tuple[float, float, float]:
+    """
+    Detect Earth disk center and radius from non-black pixels.
+
+    EPIC images are black outside the lit Earth disk. Threshold bright pixels,
+    take their centroid as disk center, and estimate radius from limb samples.
+    """
+    h, w = img.shape[:2]
+    brightness = img.max(axis=2)
+    lit = brightness > brightness_threshold
+    ys, xs = np.nonzero(lit)
+
+    if len(xs) < 100:
+        cx = (w - 1) * 0.5
+        cy = (h - 1) * 0.5
+        r = min(h, w) * 0.48
+        return cx, cy, r
+
+    cx = float(xs.mean())
+    cy = float(ys.mean())
+    angles = np.arctan2(ys - cy, xs - cx)
+    dists = np.hypot(xs - cx, ys - cy)
+
+    # Limb radius per direction; median rejects cloud gaps and outliers.
+    n_bins = 360
+    limb_radii = []
+    bin_edges = np.linspace(-np.pi, np.pi, n_bins + 1)
+    for i in range(n_bins):
+        in_bin = (angles >= bin_edges[i]) & (angles < bin_edges[i + 1])
+        if np.any(in_bin):
+            limb_radii.append(float(dists[in_bin].max()))
+
+    if limb_radii:
+        r = float(np.median(limb_radii))
+    else:
+        r = float(np.percentile(dists, 98))
+
+    return cx, cy, r
+
+
 def tangent_basis(lat: float, lon: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Unit nadir and east/north tangent axes for a lat/lon on the sphere."""
     nadir = latlon_to_cartesian(lat, lon)
@@ -208,6 +248,7 @@ def build_views(meta_list: list, image_dict: dict) -> list:
         lon = m["centroid_coordinates"]["lon"]
         nadir, east, north = tangent_basis(lat, lon)
         img = image_dict[img_name]
+        cx, cy, r_est = detect_earth_disk(img)
         views.append({
             "img": img,
             "nadir": nadir,
@@ -216,11 +257,12 @@ def build_views(meta_list: list, image_dict: dict) -> list:
             "name": img_name,
             "h": img.shape[0],
             "w": img.shape[1],
-            "cx": img.shape[1] / 2,
-            "cy": img.shape[0] / 2,
-            "r_est": min(img.shape[:2]) * 0.48,
+            "cx": cx,
+            "cy": cy,
+            "r_est": r_est,
             "sin_theta_max": SIN_THETA_MAX,
         })
+        print(f"  {img_name}: disk center=({cx:.1f}, {cy:.1f}), radius={r_est:.1f}px")
     return views
 
 
