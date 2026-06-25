@@ -135,6 +135,7 @@ def fetch_day(date: str, cache_dir: Path, collection: str = "natural") -> tuple[
         stem = Path(image_name).stem
         png_path = png_dir / f"{stem}.png"
         url = png_archive_url(image_name, collection)
+        print(f"Downloading image {url} to {png_path}")
         download_file(url, png_path)
         image_dict[stem] = load_image_array(png_path)
 
@@ -151,6 +152,7 @@ def load_offline(meta_path: str, image_paths: list[str]) -> tuple[list, dict]:
     for img_path in image_paths:
         path = Path(img_path)
         image_dict[path.stem] = load_image_array(path)
+        print(f"Loaded image {img_path}")
 
     print(f"Loaded {len(image_dict)} images and {len(meta_list)} metadata entries.")
     return meta_list, image_dict
@@ -213,6 +215,7 @@ def sample_colors(points: np.ndarray, views: list) -> np.ndarray:
 
 def write_splat_ply(output: str, points: np.ndarray, colors: np.ndarray, args) -> None:
     """Write a 3D Gaussian splat binary PLY."""
+    print(f"Writing splat ply to {output}")
     n = len(points)
     sh_dc = rgb_to_sh(colors)
     normals = points.copy()
@@ -259,6 +262,7 @@ end_header
 
 
 def build_splat_ply(meta_list: list, image_dict: dict, args) -> None:
+    print(f"Building splat ply for {args.output}")
     views = build_views(meta_list, image_dict)
     if not views:
         raise RuntimeError("No views matched metadata to images.")

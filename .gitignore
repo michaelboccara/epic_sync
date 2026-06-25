@@ -2,3 +2,6 @@ venv/
 .idea/
 *.json
 convert.exe
+cache/
+epic_cache/
+*.ply
