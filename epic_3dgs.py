@@ -3,7 +3,7 @@
 EPIC DSCOVR → Gaussian Splatting .ply
 
 Fetch natural-color (or enhanced) EPIC frames for a given date from NASA,
-or load local PNGs + metadata, then build an anisotropic Gaussian splat PLY.
+or load local images + metadata, then build an anisotropic Gaussian splat PLY.
 Uses centroid lat/lon metadata for best-view selection.
 """
 
@@ -85,10 +85,10 @@ def fetch_metadata(date: str, collection: str = "natural") -> list:
         return json.loads(resp.read())
 
 
-def png_archive_url(image_name: str, collection: str) -> str:
-    """Build the archive URL for a full-resolution PNG."""
+def img_archive_url(image_name: str, collection: str, format: str) -> str:
+    """Build the archive URL for a full-resolution image."""
     year, month, day = parse_image_ymd(image_name)
-    return f"{EPIC_BASE}/archive/{collection}/{year}/{month}/{day}/png/{image_name}.png"
+    return f"{EPIC_BASE}/archive/{collection}/{year}/{month}/{day}/{format}/{image_name}.{format}"
 
 
 def download_file(url: str, dest: Path, retries: int = 5) -> None:
@@ -113,8 +113,8 @@ def load_image_array(path: Path) -> np.ndarray:
     return np.array(Image.open(path).convert("RGB"), dtype=np.float32) / 255.0
 
 
-def fetch_day(date: str, cache_dir: Path, collection: str = "natural") -> tuple[list, dict]:
-    """Fetch metadata and PNGs for one day; return (meta_list, image_dict)."""
+def fetch_day(date: str, cache_dir: Path, collection: str = "natural", format: str = "png") -> tuple[list, dict]:
+    """Fetch metadata and images for one day; return (meta_list, image_dict)."""
     cache_dir.mkdir(parents=True, exist_ok=True)
     meta_path = cache_dir / f"images_{date}.json"
 
@@ -128,23 +128,23 @@ def fetch_day(date: str, cache_dir: Path, collection: str = "natural") -> tuple[
             json.dump(meta_list, f, indent=2)
         print(f"Fetched metadata for {len(meta_list)} images on {date}")
 
-    png_dir = cache_dir / "png"
+    img_dir = cache_dir / format
     image_dict = {}
     for entry in meta_list:
         image_name = entry["image"]
         stem = Path(image_name).stem
-        png_path = png_dir / f"{stem}.png"
-        url = png_archive_url(image_name, collection)
-        print(f"Downloading image {url} to {png_path}")
-        download_file(url, png_path)
-        image_dict[stem] = load_image_array(png_path)
+        img_path = img_dir / f"{stem}.{format}"
+        url = img_archive_url(image_name, collection, format)
+        print(f"Downloading image {url} to {img_path}")
+        download_file(url, img_path)
+        image_dict[stem] = load_image_array(img_path)
 
     print(f"Loaded {len(image_dict)} images for {date}")
     return meta_list, image_dict
 
 
 def load_offline(meta_path: str, image_paths: list[str]) -> tuple[list, dict]:
-    """Load metadata JSON and local PNG paths."""
+    """Load metadata JSON and local image paths."""
     with open(meta_path, encoding="utf-8") as f:
         meta_list = json.load(f)
 
@@ -281,7 +281,13 @@ def parse_args():
     parser.add_argument(
         "--cache-dir",
         type=str,
-        help="Directory for cached metadata and PNGs (default: ./epic_cache/{date})",
+        help="Directory for cached metadata and images (default: ./epic_cache/{date})",
+    )
+    parser.add_argument(
+        "--format",
+        choices=["png", "jpg"],
+        default="png",
+        help="EPIC image format: jpg or png (default: png)",
     )
     parser.add_argument(
         "--collection",
@@ -289,7 +295,7 @@ def parse_args():
         default="natural",
         help="EPIC image collection (default: natural)",
     )
-    parser.add_argument("--images", nargs="+", help="Paths to local PNG images (offline mode)")
+    parser.add_argument("--images", nargs="+", help="Paths to local image images (offline mode)")
     parser.add_argument("--metadata", type=str, help="Path to JSON metadata list (offline mode)")
     parser.add_argument("--output", help="Output .ply path")
     parser.add_argument("--n_gaussians", type=int, default=150000)
@@ -320,7 +326,7 @@ def main():
     args = parse_args()
 
     if args.date:
-        meta_list, image_dict = fetch_day(args.date, Path(args.cache_dir), args.collection)
+        meta_list, image_dict = fetch_day(args.date, Path(args.cache_dir), args.collection, args.format)
     else:
         meta_list, image_dict = load_offline(args.metadata, args.images)
 
