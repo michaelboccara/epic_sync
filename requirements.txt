@@ -1,3 +1,5 @@
 numpy
+Pillow
+scipy
 google-cloud-storage
 opencv-python-headless==4.2.0.32
