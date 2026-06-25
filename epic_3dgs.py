@@ -19,6 +19,9 @@ from PIL import Image
 from scipy.ndimage import map_coordinates
 
 EPIC_BASE = "https://epic.gsfc.nasa.gov"
+# Visible Earth disk half-angle in EPIC natural-color images (~22 deg).
+DISK_HALF_ANGLE_DEG = 22.0
+SIN_THETA_MAX = float(np.sin(np.deg2rad(DISK_HALF_ANGLE_DEG)))
 
 
 def fibonacci_sphere(n_points: int) -> np.ndarray:
@@ -158,6 +161,42 @@ def load_offline(meta_path: str, image_paths: list[str]) -> tuple[list, dict]:
     return meta_list, image_dict
 
 
+def tangent_basis(lat: float, lon: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Unit nadir and east/north tangent axes for a lat/lon on the sphere."""
+    nadir = latlon_to_cartesian(lat, lon)
+    lon_rad = np.deg2rad(lon)
+    east = np.array([-np.sin(lon_rad), np.cos(lon_rad), 0.0], dtype=np.float32)
+    north = np.cross(nadir, east)
+    north /= np.linalg.norm(north) + 1e-12
+    return nadir, east, north
+
+
+def point_to_disk_pixels(p: np.ndarray, view: dict) -> tuple[float, float] | None:
+    """Map a unit sphere point into EPIC image pixel coords via tangent-plane projection."""
+    n = view["nadir"]
+    dot_pn = float(np.dot(p, n))
+    if dot_pn <= 0.0:
+        return None
+
+    t = p - dot_pn * n
+    sin_theta = float(np.linalg.norm(t))
+    if sin_theta > view["sin_theta_max"]:
+        return None
+
+    u = view["cx"] + np.dot(t, view["east"]) / view["sin_theta_max"] * view["r_est"]
+    v = view["cy"] - np.dot(t, view["north"]) / view["sin_theta_max"] * view["r_est"]
+
+    du = u - view["cx"]
+    dv = v - view["cy"]
+    if du * du + dv * dv > view["r_est"] * view["r_est"]:
+        return None
+
+    if u < 0 or v < 0 or u >= view["w"] or v >= view["h"]:
+        return None
+
+    return u, v
+
+
 def build_views(meta_list: list, image_dict: dict) -> list:
     """Prepare views with nadir vectors and disk sampling parameters."""
     views = []
@@ -167,17 +206,20 @@ def build_views(meta_list: list, image_dict: dict) -> list:
             continue
         lat = m["centroid_coordinates"]["lat"]
         lon = m["centroid_coordinates"]["lon"]
-        nadir = latlon_to_cartesian(lat, lon)
+        nadir, east, north = tangent_basis(lat, lon)
         img = image_dict[img_name]
         views.append({
             "img": img,
             "nadir": nadir,
+            "east": east,
+            "north": north,
             "name": img_name,
             "h": img.shape[0],
             "w": img.shape[1],
             "cx": img.shape[1] / 2,
             "cy": img.shape[0] / 2,
             "r_est": min(img.shape[:2]) * 0.48,
+            "sin_theta_max": SIN_THETA_MAX,
         })
     return views
 
@@ -194,11 +236,14 @@ def sample_colors(points: np.ndarray, views: list) -> np.ndarray:
 
         for v in views:
             dist = angular_distance(p, v["nadir"])
-            if dist < best_dist and dist < 85.0:
-                best_dist = dist
-                best_view = v
-                best_u = v["cx"] + p[0] * v["r_est"]
-                best_v = v["cy"] - p[1] * v["r_est"]
+            if dist >= best_dist or dist >= DISK_HALF_ANGLE_DEG:
+                continue
+            uv = point_to_disk_pixels(p, v)
+            if uv is None:
+                continue
+            best_dist = dist
+            best_view = v
+            best_u, best_v = uv
 
         if best_view is not None:
             coords = np.array([[best_v], [best_u]])
@@ -210,6 +255,12 @@ def sample_colors(points: np.ndarray, views: list) -> np.ndarray:
                 except (IndexError, ValueError):
                     pass
 
+    mean_rgb = colors.mean(axis=0)
+    near_black = (colors.max(axis=1) < 0.05).mean()
+    print(
+        f"Color stats — mean RGB: [{mean_rgb[0]:.3f}, {mean_rgb[1]:.3f}, {mean_rgb[2]:.3f}], "
+        f"near-black: {near_black:.1%}"
+    )
     return colors
 
 
@@ -223,8 +274,9 @@ def write_splat_ply(output: str, points: np.ndarray, colors: np.ndarray, args) -
     positions = points * args.radius
     opacities = np.full(n, 2.197, dtype=np.float32)
     scales = np.zeros((n, 3), dtype=np.float32)
-    scales[:, 0:2] = args.base_scale * 1.15
-    scales[:, 2] = args.base_scale * 0.22
+    # 3DGS PLY stores log-scale; viewers decode with exp().
+    scales[:, 0:2] = np.log(args.base_scale * 1.15)
+    scales[:, 2] = np.log(args.base_scale * 0.22)
     rots = normals_to_quats(normals)
 
     data = np.empty((n, 14), dtype=np.float32)
